@@ -1,82 +1,71 @@
-#include <iostream>
+#include <cstddef>
 #include <fstream>
-#include <cstdlib>
-#include <string>
-#include <cinttypes>
+#include <functional>
+#include <iostream>
+#include <utility>
+#include <vector>
 
-#include "wasm.hh"
+#include "imaginary-wasm.hh"
 
-
-// A function to be called from Wasm code.
-auto hello_callback(
-  const wasm::vec<wasm::Val>& args, wasm::vec<wasm::Val>& results
-) -> wasm::own<wasm::Trap> {
-  std::cout << "Calling back..." << std::endl;
-  std::cout << "> Hello world!" << std::endl;
-  return nullptr;
+namespace {
+std::vector<char> load_file(const std::string &filename) {
+  std::ifstream file(filename, std::ios::binary | std::ios::ate);
+  auto file_size = file.tellg();
+  std::vector<char> buffer(file_size);
+  file.seekg(0);
+  if (file.fail() || !file.read(buffer.data(), file_size)) {
+    std::cout << "> Error loading module!" << std::endl;
+    exit(1);
+  }
+  return buffer;
 }
-
+} // namespace
 
 void run() {
   // Initialize.
   std::cout << "Initializing..." << std::endl;
-  auto engine = wasm::Engine::make();
-  auto store_ = wasm::Store::make(engine.get());
-  auto store = store_.get();
+  wasm::Store store;
 
   // Load binary.
   std::cout << "Loading binary..." << std::endl;
-  std::ifstream file("hello.wasm");
-  file.seekg(0, std::ios_base::end);
-  auto file_size = file.tellg();
-  file.seekg(0);
-  auto binary = wasm::vec<byte_t>::make_uninitialized(file_size);
-  file.read(binary.get(), file_size);
-  file.close();
-  if (file.fail()) {
-    std::cout << "> Error loading module!" << std::endl;
-    exit(1);
-  }
+  auto file = load_file("hello.wasm");
 
-  // Compile.
-  std::cout << "Compiling module..." << std::endl;
-  auto module = wasm::Module::make(store, binary);
-  if (!module) {
-    std::cout << "> Error compiling module!" << std::endl;
-    exit(1);
-  }
-
-  // Create external print functions.
-  std::cout << "Creating callback..." << std::endl;
-  auto hello_type = wasm::FuncType::make(
-    wasm::ownvec<wasm::ValType>::make(), wasm::ownvec<wasm::ValType>::make()
-  );
-  auto hello_func = wasm::Func::make(store, hello_type.get(), hello_callback);
+  // Here instantiation is performed straight from .wasm bytes. You can compile
+  // and instantiate in two steps with:
+  //   wasm::Module module = store.compile(file);
+  //   if (auto error = module.get_error()) { /* ... */ }
+  //   wasm::Instance instance = module.instantiate(wasm::Imports {});
 
   // Instantiate.
   std::cout << "Instantiating module..." << std::endl;
-  auto imports = wasm::vec<wasm::Extern*>::make(hello_func.get());
-  auto instance = wasm::Instance::make(store, module.get(), imports);
-  if (!instance) {
-    std::cout << "> Error instantiating module!" << std::endl;
+  wasm::Imports imports{
+    {
+      "",
+      {
+        {"hello", [] { std::cout << "> Hello world!" << std::endl; }}
+      },
+    }
+  };
+
+  wasm::Instance instance = store.instantiate(file, imports);
+  if (auto error = instance.get_error()) {
+    std::cout << "> Error instantiating module! " << error.what() << std::endl;
     exit(1);
   }
 
   // Extract export.
   std::cout << "Extracting export..." << std::endl;
-  auto exports = instance->exports();
-  if (exports.size() == 0 || exports[0]->kind() != wasm::ExternKind::FUNC || !exports[0]->func()) {
-    std::cout << "> Error accessing export!" << std::endl;
+  auto run_func = instance.exported_func(0);
+  if (auto error = run_func.error()) {
+    std::cout << "> Error accessing export: " << error.what() << std::endl;
     exit(1);
   }
-  auto run_func = exports[0]->func();
 
   // Call.
   std::cout << "Calling export..." << std::endl;
-  auto args = wasm::vec<wasm::Val>::make();
-  auto results = wasm::vec<wasm::Val>::make();
-  if (run_func->call(args, results)) {
-    std::cout << "> Error calling function!" << std::endl;
+  run_func();
+  if (auto error = run_func.get_error()) {
+    std::cout << "> Error calling function: " << error.what() << std::endl;
     exit(1);
   }
 
@@ -84,10 +73,8 @@ void run() {
   std::cout << "Shutting down..." << std::endl;
 }
 
-
-int main(int argc, const char* argv[]) {
+int main(int argc, const char *argv[]) {
   run();
   std::cout << "Done." << std::endl;
   return 0;
 }
-
