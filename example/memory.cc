@@ -4,25 +4,9 @@
 #include <string>
 #include <cinttypes>
 
-#include "wasm.hh"
+#include "imaginary-wasm.hh"
 
-
-auto get_export_memory(wasm::ownvec<wasm::Extern>& exports, size_t i) -> wasm::Memory* {
-  if (exports.size() <= i || !exports[i]->memory()) {
-    std::cout << "> Error accessing memory export " << i << "!" << std::endl;
-    exit(1);
-  }
-  return exports[i]->memory();
-}
-
-auto get_export_func(const wasm::ownvec<wasm::Extern>& exports, size_t i) -> const wasm::Func* {
-  if (exports.size() <= i || !exports[i]->func()) {
-    std::cout << "> Error accessing function export " << i << "!" << std::endl;
-    exit(1);
-  }
-  return exports[i]->func();
-}
-
+namespace {
 template<class T, class U>
 void check(T actual, U expected) {
   if (actual != expected) {
@@ -32,36 +16,34 @@ void check(T actual, U expected) {
 }
 
 template<class... Args>
-void check_ok(const wasm::Func* func, Args... xs) {
-  auto args = wasm::vec<wasm::Val>::make(wasm::Val::i32(xs)...);
-  auto results = wasm::vec<wasm::Val>::make();
-  if (func->call(args, results)) {
+void check_ok(const wasm::Func &func, Args... xs) {
+  func(xs...);
+  if (auto error = func.error()) {
     std::cout << "> Error on result, expected return" << std::endl;
     exit(1);
   }
 }
 
 template<class... Args>
-void check_trap(const wasm::Func* func, Args... xs) {
-  auto args = wasm::vec<wasm::Val>::make(wasm::Val::i32(xs)...);
-  auto results = wasm::vec<wasm::Val>::make();
-  if (! func->call(args, results)) {
+void check_trap(const wasm::Func &func, Args... xs) {
+  func(xs...);
+  if (!func.error()) {
     std::cout << "> Error on result, expected trap" << std::endl;
     exit(1);
   }
 }
 
-template<class... Args>
-auto call(const wasm::Func* func, Args... xs) -> int32_t {
-  auto args = wasm::vec<wasm::Val>::make(wasm::Val::i32(xs)...);
-  auto results = wasm::vec<wasm::Val>::make_uninitialized(1);
-  if (func->call(args, results)) {
-    std::cout << "> Error on result, expected return" << std::endl;
+std::vector<char> load_file(const std::string &filename) {
+  std::ifstream file(filename, std::ios::binary | std::ios::ate);
+  auto file_size = file.tellg();
+  std::vector<char> buffer(file_size);
+  file.seekg(0);
+  if (file.fail() || !file.read(buffer.data(), file_size)) {
+    std::cout << "> Error loading module!" << std::endl;
     exit(1);
   }
-  return results[0].i32();
+  return buffer;
 }
-
 
 void run() {
   // Initialize.
@@ -72,80 +54,61 @@ void run() {
 
   // Load binary.
   std::cout << "Loading binary..." << std::endl;
-  std::ifstream file("memory.wasm");
-  file.seekg(0, std::ios_base::end);
-  auto file_size = file.tellg();
-  file.seekg(0);
-  auto binary = wasm::vec<byte_t>::make_uninitialized(file_size);
-  file.read(binary.get(), file_size);
-  file.close();
-  if (file.fail()) {
-    std::cout << "> Error loading module!" << std::endl;
-    exit(1);
-  }
-
-  // Compile.
-  std::cout << "Compiling module..." << std::endl;
-  auto module = wasm::Module::make(store, binary);
-  if (!module) {
-    std::cout << "> Error compiling module!" << std::endl;
-    exit(1);
-  }
+  auto file = load_file("memory.wasm");
 
   // Instantiate.
   std::cout << "Instantiating module..." << std::endl;
-  auto imports = wasm::vec<wasm::Extern*>::make();
-  auto instance = wasm::Instance::make(store, module.get(), imports);
-  if (!instance) {
-    std::cout << "> Error instantiating module!" << std::endl;
+  auto instance = store.instantiate(file, wasm::Imports{});
+  if (auto error = instance.error()) {
+    std::cout << "> Error instantiating module: " << error->what() << std::endl;
     exit(1);
   }
 
   // Extract export.
   std::cout << "Extracting exports..." << std::endl;
-  auto exports = instance->exports();
   size_t i = 0;
-  auto memory = get_export_memory(exports, i++);
-  auto size_func = get_export_func(exports, i++);
-  auto load_func = get_export_func(exports, i++);
-  auto store_func = get_export_func(exports, i++);
+  auto memory = instance->exported_memory(0);
+  auto size_func = instance->exported_func<int32_t()>(i++);
+  auto load_func = instance->exported_func<int32_t(int32_t)>(i++);
+  auto store_func = instance->exported_func<int32_t(int32_t)>(i++);
 
   // Try cloning.
-  assert(memory->copy()->same(memory));
+  // ???
+  //assert(memory->copy()->same(memory));
 
   // Check initial memory.
   std::cout << "Checking memory..." << std::endl;
-  check(memory->size(), 2u);
-  check(memory->data_size(), 0x20000u);
-  check(memory->data()[0], 0);
-  check(memory->data()[0x1000], 1);
-  check(memory->data()[0x1003], 4);
+  check(memory->size(), wasm::Pages(2));
+  check(memory->contents()->size(), 0x20000u);
+  check(memory->contents()[0], 0);
+  check(memory->contents()[0x1000], 1);
+  check(memory->contents()[0x1003], 4);
 
-  check(call(size_func), 2);
-  check(call(load_func, 0), 0);
-  check(call(load_func, 0x1000), 1);
-  check(call(load_func, 0x1003), 4);
-  check(call(load_func, 0x1ffff), 0);
+  check(size_func(), 2);
+  check(load_func(0), 0);
+  check(load_func(0x1000), 1);
+  check(load_func(0x1003), 4);
+  check(load_func(0x1ffff), 0);
   check_trap(load_func, 0x20000);
 
   // Mutate memory.
   std::cout << "Mutating memory..." << std::endl;
-  memory->data()[0x1003] = 5;
+  memory->contents()[0x1003] = 5;
   check_ok(store_func, 0x1002, 6);
   check_trap(store_func, 0x20000, 0);
 
-  check(memory->data()[0x1002], 6);
-  check(memory->data()[0x1003], 5);
-  check(call(load_func, 0x1002), 6);
-  check(call(load_func, 0x1003), 5);
+  check(memory->contents()[0x1002], 6);
+  check(memory->contents()[0x1003], 5);
+  check(load_func(0x1002), 6);
+  check(load_func(0x1003), 5);
 
   // Grow memory.
   std::cout << "Growing memory..." << std::endl;
   check(memory->grow(1), true);
   check(memory->size(), 3u);
-  check(memory->data_size(), 0x30000u);
+  check(memory->contents()->size(), 0x30000u);
 
-  check(call(load_func, 0x20000), 0);
+  check(load_func(0x20000), 0);
   check_ok(store_func, 0x20000, 0);
   check_trap(load_func, 0x30000);
   check_trap(store_func, 0x30000, 0);
@@ -156,8 +119,7 @@ void run() {
   // Create stand-alone memory.
   // TODO(wasm+): Once Wasm allows multiple memories, turn this into import.
   std::cout << "Creating stand-alone memory..." << std::endl;
-  auto memorytype = wasm::MemoryType::make(wasm::Limits(5, 5));
-  auto memory2 = wasm::Memory::make(store, memorytype.get());
+  auto memory2 = store.make_memory(wasm::MemoryType{5, 5});
   check(memory2->size(), 5u);
   check(memory2->grow(1), false);
   check(memory2->grow(0), true);
@@ -165,7 +127,7 @@ void run() {
   // Shut down.
   std::cout << "Shutting down..." << std::endl;
 }
-
+}
 
 int main(int argc, const char* argv[]) {
   run();

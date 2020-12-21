@@ -4,7 +4,7 @@
 #include <string>
 #include <cinttypes>
 
-#include "wasm.hh"
+#include "imaginary-wasm.hh"
 
 // A function to be called from Wasm code.
 auto callback(

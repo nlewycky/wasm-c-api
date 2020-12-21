@@ -4,41 +4,45 @@
 #include <string>
 #include <cinttypes>
 
-#include "wasm.hh"
+#include "imaginary-wasm.hh"
 
 
+namespace {
 const int iterations = 100000;
 
 int live_count = 0;
 
-void finalize(void* data) {
-  intptr_t i = reinterpret_cast<intptr_t>(data);
-  if (i % (iterations / 10) == 0) {
-    std::cout << "Finalizing #" << i << "..." << std::endl;
+void finalize(intptr_t *i) {
+  if (*i % (iterations / 10) == 0) {
+    std::cout << "Finalizing #" << *i << "..." << std::endl;
   }
   --live_count;
 }
 
-void run_in_store(wasm::Store* store) {
-  // Load binary.
-  std::cout << "Loading binary..." << std::endl;
-  std::ifstream file("finalize.wasm");
-  file.seekg(0, std::ios_base::end);
+std::vector<char> load_file(const std::string &filename) {
+  std::ifstream file(filename, std::ios::binary | std::ios::ate);
   auto file_size = file.tellg();
+  std::vector<char> buffer(file_size);
   file.seekg(0);
-  auto binary = wasm::vec<byte_t>::make_uninitialized(file_size);
-  file.read(binary.get(), file_size);
-  file.close();
-  if (file.fail()) {
+  if (file.fail() || !file.read(buffer.data(), file_size)) {
     std::cout << "> Error loading module!" << std::endl;
     exit(1);
   }
+  return buffer;
+}
+} // namespace
+
+
+void run_in_store(wasm::Store* store) {
+  // Load binary.
+  std::cout << "Loading binary..." << std::endl;
+  auto file = load_file("finalize.wasm");
 
   // Compile.
   std::cout << "Compiling module..." << std::endl;
   auto module = wasm::Module::make(store, binary);
-  if (!module) {
-    std::cout << "> Error compiling module!" << std::endl;
+  if (auto error = module.error()) {
+    std::cout << "> Error compiling module: " << error->what() << std::endl;
     exit(1);
   }
 
@@ -46,13 +50,13 @@ void run_in_store(wasm::Store* store) {
   std::cout << "Instantiating modules..." << std::endl;
   for (int i = 0; i <= iterations; ++i) {
     if (i % (iterations / 10) == 0) std::cout << i << std::endl;
-    auto imports = wasm::vec<wasm::Extern*>::make();
-    auto instance = wasm::Instance::make(store, module.get(), imports);
-    if (!instance) {
-      std::cout << "> Error instantiating module " << i << "!" << std::endl;
+    auto instance = store.instantiate(module, wasm::Imports{});
+    if (auto error = instance.error()) {
+      std::cout << "> Error instantiating module " << i << ": " << error->what() << std::endl;
       exit(1);
     }
-    instance->set_host_info(reinterpret_cast<void*>(i), &finalize);
+    // ?????
+    instance->set_host_info(&i, &finalize);
     ++live_count;
   }
 
@@ -68,18 +72,18 @@ void run() {
 
   std::cout << "Live count " << live_count << std::endl;
   std::cout << "Creating store 1..." << std::endl;
-  auto store1 = wasm::Store::make(engine.get());
+  wasm::Store store1(engine);
 
   std::cout << "Running in store 1..." << std::endl;
-  run_in_store(store1.get());
+  run_in_store(store1);
   std::cout << "Live count " << live_count << std::endl;
 
   {
     std::cout << "Creating store 2..." << std::endl;
-    auto store2 = wasm::Store::make(engine.get());
+    wasm::Store store2(engine);
 
     std::cout << "Running in store 2..." << std::endl;
-    run_in_store(store2.get());
+    run_in_store(store2);
     std::cout << "Live count " << live_count << std::endl;
 
     std::cout << "Deleting store 2..." << std::endl;
@@ -87,7 +91,7 @@ void run() {
   }
 
   std::cout << "Running in store 1..." << std::endl;
-  run_in_store(store1.get());
+  run_in_store(store1);
   std::cout << "Live count " << live_count << std::endl;
 
   std::cout << "Deleting store 1..." << std::endl;
