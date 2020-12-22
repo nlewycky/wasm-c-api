@@ -1,4 +1,5 @@
-#pragma once
+#ifndef IMAGINARY_WASM_HH
+#define IMAGINARY_WASM_HH
 
 #include <functional>
 #include <initializer_list>
@@ -6,6 +7,26 @@
 #include <vector>
 
 namespace wasm {
+
+typedef char byte_t;
+typedef float float32_t;
+typedef double float64_t;
+
+static_assert(sizeof(float32_t) == sizeof(uint32_t), "incompatible float type");
+static_assert(sizeof(float64_t) == sizeof(uint64_t), "incompatible double type");
+static_assert(sizeof(intptr_t) == sizeof(uint32_t) ||
+              sizeof(intptr_t) == sizeof(uint64_t),
+              "incompatible pointer type");
+
+// TODO: int128
+
+#ifdef __cpp_lib_ranges
+  //template<typename T>
+  //struct
+#else
+  // TODO: define iterator_range
+#endif
+
 struct Frame {
   // TODO: what are the pointer invalidation rules here?
   const Instance *instance() const;
@@ -80,9 +101,17 @@ struct Export {
   bool is_func() const;
 };
 struct Func {
-  std::function<Trap(void)> func() const;
+  const std::function<Trap(const std::vector<Val> &, std::vector<Val> &)> func;
   Error *error() const;
-  void operator()();
+  void operator()(const std::vector<Val> &args, std::vector<Val> &returns);
+};
+template<typename T> struct TypedFunc;
+template<typename Ret, typename... Args>
+struct TypedFunc<Ret(Args...)> {
+  using F = Ret(Args...);
+  const std::function<F> func;
+  Error *error() const;
+  Ret operator()(Args...);
 };
 struct Global {
   Error *error() const;
@@ -112,10 +141,8 @@ struct Instance {
   // std::pair<const_iterator, const_iterator> exported_funcs();
   Func exported_func(int) const;
   Func exported_func(const std::string &) const;
-  template<typename Fn>
-  Func exported_func(int) const;
-  template<typename Fn>
-  Func exported_func(const std::string &) const;
+  template<typename F> TypedFunc<F> exported_func_typed(int) const;
+  template<typename F> TypedFunc<F> exported_func_typed(const std::string &) const;
   size_t exported_func_size() const;
   bool exported_func_empty() const;
 };
@@ -146,3 +173,5 @@ struct Val {
 // it seems like it would only be useful if it could handle multiple arguments
 // at a time?
 } // namespace wasm
+
+#endif

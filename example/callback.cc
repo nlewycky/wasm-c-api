@@ -69,7 +69,7 @@ void run() {
 
   // Extract export.
   std::cout << "Extracting export..." << std::endl;
-  auto run_func = instance.exported_func(0);
+  auto run_func = instance.exported_func_typed<int32_t(int32_t, int32_t)>(0);
   if (auto error = run_func.error()) {
     std::cout << "> Error accessing export: " << error->what() << std::endl;
     exit(1);
