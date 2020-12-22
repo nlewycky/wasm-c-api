@@ -10,7 +10,7 @@
 namespace {
 // Print a Wasm value
 auto operator<<(std::ostream &out, const wasm::Val &val) -> std::ostream& {
-  std::visit([](auto &&arg) { std::cout << arg; });
+  std::visit([](auto &&arg) { out << arg; });
   return out;
 }
 
