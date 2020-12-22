@@ -74,7 +74,6 @@ void run() {
     std::cout << "> Error accessing export: " << error->what() << std::endl;
     exit(1);
   }
-  auto run_func = exports[0]->func();
 
   // Call.
   std::cout << "Calling export..." << std::endl;
